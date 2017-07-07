@@ -71,6 +71,7 @@ class CommunicationPort(object):
         self._communication_mode = communication_mode
         self._target_port = None
         self._receive_callback = None
+        self._receive_callback_tcp = None
         self._log = logging.getLogger(__name__)
         self._listening: bool = False
         self.target_address = target_address  # For the mode TCP_RECV, it's necessary to give its value.
@@ -96,6 +97,14 @@ class CommunicationPort(object):
     @receive_callback.setter
     def receive_callback(self, fun):
         self._receive_callback = fun
+
+    @property
+    def receive_callback_tcp(self):
+        return self._receive_callback_tcp
+
+    @receive_callback_tcp.setter
+    def receive_callback_tcp(self, fun):
+        self._receive_callback_tcp = fun
 
     @property
     def target_port(self):
@@ -132,12 +141,8 @@ class CommunicationPort(object):
             self._target_port.receive(data, respond_function=self.receive)
         elif self._communication_mode == CommunicationMode.TCP_SEND:
             self.soc.send(pickle.dumps(data))
-            if USE_PORT == "zmq":
-                self.receive(pickle.loads(self.soc.recv()))
-            if USE_PORT == "socket":
-                self.receive(pickle.loads(self.soc.recv(512)))
-            self.recv = True
-            self.soc.close()
+            self.task = ReceiveThread(self.soc)
+            self.task.start()
         else:
             raise AttributeError("communicationMode needs to be FUNCTION_CALL_SEND or TCP_SEND")
 
@@ -150,18 +155,29 @@ class CommunicationPort(object):
                 request for a REQ-REP pattern 
                 when in FUNCTION_CALL mode. if None, no Rep is possible
         """
-        if (self._communication_mode == CommunicationMode.FUNCTION_CALL_RECV or
-            self._communication_mode == CommunicationMode.FUNCTION_CALL_SEND):
-            if respond_function:
+        if respond_function:
                 # print("{}: calling callback with respond function".format(self.port_name))
-                self._receive_callback(data, respond_function=respond_function)
-            else:
+            self._receive_callback(data, respond_function=respond_function)
+            print("1",data)
+        else:
                 # print("{}: calling callback without respond function".format(self.port_name))
+            if self._communication_mode == CommunicationMode.TCP_SEND:
                 self._receive_callback(data)
 
-        if (self._communication_mode == CommunicationMode.TCP_RECV or
-            self._communication_mode == CommunicationMode.TCP_SEND):
-            self._receive_callback(data)
+            #if self._communication_mode == CommunicationMode.TCP_RECV:
+            #    self._receive_callback(data,respond_function=None)
+            #    print("2", data)
+            #    self.task.send_message=data
+            if self._communication_mode == CommunicationMode.FUNCTION_CALL_RECV \
+                    or self._communication_mode == CommunicationMode.FUNCTION_CALL_SEND:
+                self._receive_callback(data)
+                print("3", data)
+
+    def receive_tcp(self,data: dict):
+        if self._communication_mode == CommunicationMode.TCP_RECV:
+            self._receive_callback_tcp(data)
+            print("2", data)
+            self.task.send_message (data)
 
     def _start_listening(self, address):
         """Only useful for TCP mode, starts a listening thread, 
@@ -180,6 +196,19 @@ class CommunicationPort(object):
             raise ValueError("USE_PORT needs to be zmq or socket")
         self._listening = True
         return soc
+
+
+class ReceiveThread(threading.Thread):
+    def __init__(self, soc):
+        super(ReceiveThread, self).__init__()
+        self.soc = soc
+        self.data = None
+        self.recv = False
+    def run(self):
+        self.data = pickle.loads(self.soc.recv())
+        self.recv = True
+        self.soc.close()
+
 
 
 class ListenThread(threading.Thread):
@@ -205,11 +234,11 @@ class ListenThread(threading.Thread):
         except:
             return False
 
-    @property
-    def send_message(self):
-        return self._send_message
+    #@property
+    #def send_message(self):
+    #    return self._send_message
 
-    @send_message.setter
+    #@send_message.setter
     def send_message(self, value):
         self._send_message = value
 
@@ -224,7 +253,8 @@ class ListenThread(threading.Thread):
             s.bind("tcp://*:{}".format(self.port))
             self.data = pickle.loads(s.recv())
             self.recv = True
-            while not self.send_message:
+            while not self._send_message:
+                print(self._send_message)
                 time.sleep(0.001)
             s.send(pickle.dumps(self._send_message))
             s.close()
@@ -238,7 +268,7 @@ class ListenThread(threading.Thread):
             ss, addr = s.accept()
             self.data = pickle.loads(ss.recv(512))
             self.recv = True
-            while not self.send_message:
+            while not self._send_message:
                 time.sleep(0.001)
             ss.send(pickle.dumps(self._send_message))
             ss.close()
