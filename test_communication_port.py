@@ -34,6 +34,11 @@ class TestCommunicationPort(unittest.TestCase):
         self.data_b = data
         respond_function(TestCommunicationPort.RESPONSE_MSG)
 
+    @nottest
+    def callback_request_tcp(self, data):
+        """fake callback method"""
+        self.data_c = data
+
     def test_simple_direct_call(self):
         """write from port a to port b"""
 
@@ -60,18 +65,21 @@ class TestCommunicationPort(unittest.TestCase):
         port_b = CommunicationPort(CommunicationMode.TCP_RECV, target_address=address)
         port_a.port_name = "port_a"
         port_b.port_name = "port_b"
-        port_b.receive_callback = self.callback_response
-        #port_b.receive_callback = self.callback_request
+        port_a.receive_callback = self.callback_response
+        port_b.receive_callback = self.callback_request_tcp
         port_b.task.start()
+        port_b.task.send_message = TestCommunicationPort.RESPONSE_MSG
         port_a.target_port = port_b.task.address
         data_a = {"test":"ok_a"}
         port_a.send(data_a)
-        port_a.soc.close()
         while not port_b.task.recv:
             time.sleep(0.001)
         port_b.receive(port_b.task.data)
-        self.assertEqual(self.data_a, data_a)
-  
+        self.assertEqual(self.data_c, data_a)
+        while not port_a.recv:
+            time.sleep(0.001)
+        self.assertEqual(self.data_a, TestCommunicationPort.RESPONSE_MSG)
+
 
 if __name__ == '__main__':
     unittest.main()

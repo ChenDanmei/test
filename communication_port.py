@@ -20,6 +20,7 @@ import zmq
 import pickle
 import threading
 from parse import *
+import time
 
 USE_PORT = "zmq"  # Default definition is "zmq", also we can choose "socket" to use socket send messages.
 
@@ -78,6 +79,7 @@ class CommunicationPort(object):
         if self._communication_mode == CommunicationMode.TCP_SEND:
             self.soc = self._start_sending()
         self._name = ""
+        self.recv = False
 
     @property
     def port_name(self):
@@ -130,8 +132,15 @@ class CommunicationPort(object):
             self._target_port.receive(data, respond_function=self.receive)
         elif self._communication_mode == CommunicationMode.TCP_SEND:
             self.soc.send(pickle.dumps(data))
+            if USE_PORT == "zmq":
+                self.receive(pickle.loads(self.soc.recv()))
+            if USE_PORT == "socket":
+                self.receive(pickle.loads(self.soc.recv(512)))
+            self.recv = True
+            self.soc.close()
         else:
             raise AttributeError("communicationMode needs to be FUNCTION_CALL_SEND or TCP_SEND")
+
 
     def receive(self, data: dict, respond_function=None):
         """
@@ -149,9 +158,9 @@ class CommunicationPort(object):
             else:
                 # print("{}: calling callback without respond function".format(self.port_name))
                 self._receive_callback(data)
-                # else:
-                # case TCP
-        if (self._communication_mode == CommunicationMode.TCP_RECV):
+
+        if (self._communication_mode == CommunicationMode.TCP_RECV or
+            self._communication_mode == CommunicationMode.TCP_SEND):
             self._receive_callback(data)
 
     def _start_listening(self, address):
@@ -176,12 +185,14 @@ class CommunicationPort(object):
 class ListenThread(threading.Thread):
     def __init__(self, address):
         super(ListenThread, self).__init__()
-        r = parse("tcp://{target}:{port}", address)  # TODO
+        r = parse("tcp://{target}:{port}", address)
         self.address = None
         self.target = r['target']
         self.port = r['port']
         self.data = {}
         self.recv = False
+        self._send_message = None
+
 
     def _check_address(self):
         if self.target == 'localhost':
@@ -194,6 +205,14 @@ class ListenThread(threading.Thread):
         except:
             return False
 
+    @property
+    def send_message(self):
+        return self._send_message
+
+    @send_message.setter
+    def send_message(self, value):
+        self._send_message = value
+
     def run(self):
         if USE_PORT == "zmq":
             if not self._check_address():
@@ -205,8 +224,11 @@ class ListenThread(threading.Thread):
             s.bind("tcp://*:{}".format(self.port))
             self.data = pickle.loads(s.recv())
             self.recv = True
+            while not self.send_message:
+                time.sleep(0.001)
+            s.send(pickle.dumps(self._send_message))
             s.close()
-            context.term()
+
         elif USE_PORT == "socket":
             import socket
             self.address = ('{}'.format(self.target), int(self.port))
@@ -216,6 +238,9 @@ class ListenThread(threading.Thread):
             ss, addr = s.accept()
             self.data = pickle.loads(ss.recv(512))
             self.recv = True
+            while not self.send_message:
+                time.sleep(0.001)
+            ss.send(pickle.dumps(self._send_message))
             ss.close()
             s.close()
         else:
